@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100dvh;
+  width: 100vw;
+  overflow: hidden;
+  position: fixed;
+}
+
+#__next {
+  height: 100%;
+  width: 100%;
+}
