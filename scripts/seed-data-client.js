@@ -6,6 +6,7 @@ import { collection, addDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 const deckCards = [
+  // Time Bonus Cards
   {
     type: 'timeBonus',
     name: 'Extra Minute',
@@ -24,6 +25,26 @@ const deckCards = [
     description: 'Add 180 seconds to your hiding time',
     value: 180,
   },
+  // Powerup Cards
+  {
+    type: 'powerup',
+    name: 'Hand Expansion',
+    description: 'Increase hand size by 2 cards',
+    effect: 'handSize+2',
+  },
+  {
+    type: 'powerup',
+    name: 'Double Draw',
+    description: 'Draw twice as many cards next time',
+    effect: 'doubleDraw',
+  },
+  {
+    type: 'powerup',
+    name: 'Question Shield',
+    description: 'Skip the next question without penalty',
+    effect: 'skipQuestion',
+  },
+  // Curse Cards
   {
     type: 'curse',
     name: 'FREEZE',
@@ -51,75 +72,145 @@ const deckCards = [
 ];
 
 const questions = [
+  // Matching Questions (Draw 3, Keep 1)
   {
-    category: 'Geography',
-    question: 'What is the capital of France?',
-    answer: 'Paris',
-    type: 'normal',
+    category: 'Matching',
+    question: 'What landmark is closest to your hiding spot?',
+    answer: 'Answer with a specific landmark name',
+    type: 'matching',
+    drawCards: 3,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
-    category: 'Geography',
-    question: 'Which river is the longest in the world?',
-    answer: 'Nile',
-    type: 'normal',
+    category: 'Matching',
+    question: 'What type of building are you near?',
+    answer: 'Answer with building type',
+    type: 'matching',
+    drawCards: 3,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
-    category: 'Geography',
-    question: 'What is the smallest country in the world?',
-    answer: 'Vatican City',
-    type: 'normal',
+    category: 'Matching',
+    question: 'What color is the most prominent sign near you?',
+    answer: 'Answer with a color',
+    type: 'matching',
+    drawCards: 3,
+    keepCards: 1,
+    timeLimit: 300,
+  },
+  // Measuring Questions (Draw 2, Keep 1)
+  {
+    category: 'Measuring',
+    question: 'How many steps from your hiding spot to the nearest transit stop?',
+    answer: 'Answer with a number',
+    type: 'measuring',
+    drawCards: 2,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
-    category: 'History',
-    question: 'In which year did World War II end?',
-    answer: '1945',
-    type: 'normal',
+    category: 'Measuring',
+    question: 'How many minutes walk to the nearest landmark?',
+    answer: 'Answer with a number',
+    type: 'measuring',
+    drawCards: 2,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
-    category: 'History',
-    question: 'Who was the first person to walk on the moon?',
-    answer: 'Neil Armstrong',
-    type: 'normal',
+    category: 'Measuring',
+    question: 'How many buildings can you see from your spot?',
+    answer: 'Answer with a number',
+    type: 'measuring',
+    drawCards: 2,
+    keepCards: 1,
+    timeLimit: 300,
   },
+  // Radar Questions (Draw 2, Keep 1) - Reveals location for 10 seconds
   {
-    category: 'Science',
-    question: 'What is the chemical symbol for water?',
-    answer: 'H2O',
-    type: 'normal',
-  },
-  {
-    category: 'Science',
-    question: 'How many planets are in our solar system?',
-    answer: '8',
-    type: 'normal',
-  },
-  {
-    category: 'Ping',
-    question: 'What is 2 + 2?',
-    answer: '4',
-    type: 'ping',
-  },
-  {
-    category: 'Ping',
-    question: 'What color is the sky?',
-    answer: 'Blue',
-    type: 'ping',
+    category: 'Radar',
+    question: 'What is the name of the street you are on?',
+    answer: 'Answer with street name',
+    type: 'radar',
+    drawCards: 2,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
     category: 'Radar',
-    question: 'What is the capital of Japan?',
-    answer: 'Tokyo',
+    question: 'What is the nearest intersection?',
+    answer: 'Answer with intersection names',
     type: 'radar',
+    drawCards: 2,
+    keepCards: 1,
+    timeLimit: 300,
+  },
+  // Thermometer Questions (Draw 1, Keep 1)
+  {
+    category: 'Thermometer',
+    question: 'What direction are you facing?',
+    answer: 'Answer with a cardinal direction',
+    type: 'thermometer',
+    drawCards: 1,
+    keepCards: 1,
+    timeLimit: 300,
   },
   {
-    category: 'Radar',
-    question: 'How many continents are there?',
-    answer: '7',
-    type: 'radar',
+    category: 'Thermometer',
+    question: 'What is the elevation of your hiding spot?',
+    answer: 'Answer with approximate elevation',
+    type: 'thermometer',
+    drawCards: 1,
+    keepCards: 1,
+    timeLimit: 300,
+  },
+  // Photo Questions (Draw 3, Keep 2) - 10-20 min time limit
+  {
+    category: 'Photo',
+    question: 'Take a photo of a unique feature near your hiding spot',
+    answer: 'Submit a photo',
+    type: 'photo',
+    drawCards: 3,
+    keepCards: 2,
+    timeLimit: 600, // 10 minutes for small/medium, 20 for large
+  },
+  {
+    category: 'Photo',
+    question: 'Take a photo showing your view from the hiding spot',
+    answer: 'Submit a photo',
+    type: 'photo',
+    drawCards: 3,
+    keepCards: 2,
+    timeLimit: 600,
+  },
+  // Tentacle Questions (Draw 4, Keep 1)
+  {
+    category: 'Tentacle',
+    question: 'Describe three distinct features visible from your hiding spot',
+    answer: 'Answer with three features',
+    type: 'tentacle',
+    drawCards: 4,
+    keepCards: 1,
+    timeLimit: 300,
+  },
+  {
+    category: 'Tentacle',
+    question: 'What are the three closest landmarks to your position?',
+    answer: 'Answer with three landmark names',
+    type: 'tentacle',
+    drawCards: 4,
+    keepCards: 1,
+    timeLimit: 300,
   },
 ];
 
 export async function seedDeck() {
+  if (!db) {
+    console.error('Firebase db is not initialized');
+    return false;
+  }
   try {
     for (const card of deckCards) {
       await addDoc(collection(db, 'deck'), card);
@@ -133,6 +224,10 @@ export async function seedDeck() {
 }
 
 export async function seedQuestions() {
+  if (!db) {
+    console.error('Firebase db is not initialized');
+    return false;
+  }
   try {
     for (const question of questions) {
       await addDoc(collection(db, 'questions'), question);

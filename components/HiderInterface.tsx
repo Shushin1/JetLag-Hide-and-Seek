@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { doc, collection, getDocs, updateDoc, onSnapshot, getDoc } from 'firebase/firestore'
-import { db, auth } from '@/lib/firebase'
-import { Game, Card, Curse } from '@/types/game'
+import { useEffect, useState, useRef } from 'react'
+import { doc, collection, getDocs, updateDoc, onSnapshot, getDoc, deleteField } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { db, auth, storage } from '@/lib/firebase'
+import { Game, Card, Curse, ChatMessage } from '@/types/game'
 import Map, { Marker, Source, Layer } from 'react-map-gl'
-import 'mapbox-gl/dist/mapbox-gl.css'
-import { MapPin, Menu, Coins, X } from 'lucide-react'
+import { MapPin, Menu, Coins, X, Camera, Upload } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface HiderInterfaceProps {
@@ -16,21 +16,43 @@ interface HiderInterfaceProps {
 export default function HiderInterface({ game }: HiderInterfaceProps) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawnCard, setDrawnCard] = useState<Card | null>(null)
+  const [hand, setHand] = useState<Card[]>([])
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [mapboxToken] = useState(process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '')
   const [pendingQuestion, setPendingQuestion] = useState<any>(null)
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [hidingPeriodTimeLeft, setHidingPeriodTimeLeft] = useState<number | null>(null)
+  const [questionTimeLeft, setQuestionTimeLeft] = useState<number | null>(null)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [currentGame, setCurrentGame] = useState<Game>(game)
+  const isAnsweringRef = useRef(false) // Prevent multiple simultaneous calls
 
   useEffect(() => {
+    if (!db) return
     const gameRef = doc(db, 'games', game.id)
     const unsubscribe = onSnapshot(gameRef, (snapshot) => {
       if (!snapshot.exists()) return
-      const gameData = snapshot.data()
-      if (gameData.pendingQuestion) {
-        setPendingQuestion(gameData.pendingQuestion)
-      } else {
-        setPendingQuestion(null)
+      const gameData = { id: snapshot.id, ...snapshot.data() } as Game
+      setCurrentGame(gameData)
+      console.log('Game data updated:', gameData)
+      // Only update pendingQuestion if we're not currently answering
+      if (!isAnsweringRef.current) {
+        if (gameData.pendingQuestion) {
+          // Only update if it's a different question
+          const newTimestamp = gameData.pendingQuestion.timestamp?.toMillis?.() || gameData.pendingQuestion.timestamp?.getTime?.() || Date.now()
+          const currentTimestamp = pendingQuestion?.timestamp?.toMillis?.() || pendingQuestion?.timestamp?.getTime?.() || 0
+          if (!pendingQuestion || newTimestamp !== currentTimestamp) {
+            setPendingQuestion(gameData.pendingQuestion)
+          }
+        } else {
+          // Clear if no pending question
+          if (pendingQuestion) {
+            setPendingQuestion(null)
+          }
+        }
       }
     })
 
@@ -70,6 +92,7 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
   }, [])
 
   const updateHiderLocation = async (loc: { lat: number; lng: number }) => {
+    if (!db) return
     try {
       const gameRef = doc(db, 'games', game.id)
       await updateDoc(gameRef, { hiderLocation: loc })
@@ -79,6 +102,7 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
   }
 
   const drawCard = async () => {
+    if (!db) return
     try {
       const deckRef = collection(db, 'deck')
       const snapshot = await getDocs(deckRef)
@@ -100,7 +124,7 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
   }
 
   const playCard = async () => {
-    if (!drawnCard) return
+    if (!drawnCard || !db) return
 
     try {
       const gameRef = doc(db, 'games', game.id)
@@ -131,25 +155,123 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
   }
 
   const answerQuestion = async (correct: boolean) => {
+    console.log('=== ANSWER QUESTION CALLED ===', { correct, hasPendingQuestion: !!pendingQuestion, isAnswering: isAnsweringRef.current })
+    
+    // Basic validation
+    if (!db) {
+      console.error('Firebase db not available')
+      alert('Database connection error. Please refresh the page.')
+      return
+    }
+    
+    if (!pendingQuestion) {
+      console.error('No pending question to answer')
+      return
+    }
+    
+    // Prevent multiple calls
+    if (isAnsweringRef.current) {
+      console.log('Already processing answer, ignoring duplicate call')
+      return
+    }
+    
+    // For photo questions, require photo upload
+    if (pendingQuestion.question?.type === 'photo' && correct && !photoFile) {
+      alert('Please take or upload a photo first')
+      return
+    }
+
+    // Set flag immediately
+    isAnsweringRef.current = true
+    setUploadingPhoto(true)
+    
     try {
       const gameRef = doc(db, 'games', game.id)
       const gameSnapshot = await getDoc(gameRef)
-      const currentGame = { id: gameSnapshot.id, ...gameSnapshot.data() } as Game
-
-      if (correct) {
-        await updateDoc(gameRef, {
-          coins: (currentGame.coins || 0) + 1,
-          pendingQuestion: null,
-        })
-      } else {
-        await updateDoc(gameRef, {
-          pendingQuestion: null,
-        })
+      if (!gameSnapshot.exists()) {
+        throw new Error('Game not found')
+      }
+      
+      const currentGameData = { id: gameSnapshot.id, ...gameSnapshot.data() } as Game
+      
+      // Upload photo if needed
+      let photoUrl: string | null = null
+      if (pendingQuestion.question?.type === 'photo' && correct && photoFile && storage) {
+        console.log('Uploading photo...')
+        const photoRef = ref(storage, `game-photos/${game.id}/${Date.now()}-${photoFile.name}`)
+        await uploadBytes(photoRef, photoFile)
+        photoUrl = await getDownloadURL(photoRef)
+        console.log('Photo uploaded:', photoUrl)
       }
 
+      // Create chat message
+      const questionText = pendingQuestion.question?.question || 'Unknown question'
+      const category = pendingQuestion.category || 'Unknown'
+      const answerText = correct ? 'Correct ✓' : 'Wrong ✗'
+      
+      // Build chat message object, only include photoUrl if it exists
+      const chatMessage: any = {
+        id: Date.now().toString(),
+        type: pendingQuestion.question?.type === 'photo' ? 'photo' : 'answer',
+        content: answerText,
+        question: questionText,
+        category: category,
+        timestamp: new Date(),
+        sender: 'hider',
+      }
+      
+      // Only add photoUrl if it's not null/undefined
+      if (photoUrl) {
+        chatMessage.photoUrl = photoUrl
+      }
+
+      // Prepare update
+      const currentMessages = currentGameData.chatMessages || []
+      const updatedMessages = [...currentMessages, chatMessage]
+      
+      // Build update data, ensuring no undefined values
+      const updateData: any = {
+        chatMessages: updatedMessages,
+        pendingQuestion: deleteField(),
+      }
+      
+      if (correct) {
+        updateData.coins = (currentGameData.coins || 0) + 1
+      }
+      
+      // Remove any undefined values (Firestore doesn't allow them)
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined) {
+          delete updateData[key]
+        }
+      })
+      
+      // Also clean chatMessages array
+      updateData.chatMessages = updateData.chatMessages.map((msg: any) => {
+        const cleaned: any = {}
+        Object.keys(msg).forEach(key => {
+          if (msg[key] !== undefined) {
+            cleaned[key] = msg[key]
+          }
+        })
+        return cleaned
+      })
+
+      console.log('Updating Firestore:', updateData)
+      await updateDoc(gameRef, updateData)
+      console.log('Firestore updated successfully')
+      
+      // Clear local state
       setPendingQuestion(null)
+      setPhotoFile(null)
+      setPhotoPreview(null)
+      
     } catch (error) {
-      console.error('Error answering question:', error)
+      console.error('Error in answerQuestion:', error)
+      alert(`Error answering question: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setUploadingPhoto(false)
+      isAnsweringRef.current = false
     }
   }
 
@@ -213,11 +335,17 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
           setMapError('Failed to load map. Please check your Mapbox token.')
         }}
         reuseMaps
-        interactive={mapReady}
+        dragRotate={false}
+        dragPan={true}
       >
         <Marker longitude={centerLng} latitude={centerLat}>
           <div className="w-6 h-6 bg-green-500 rounded-full border-2 border-white shadow-lg"></div>
         </Marker>
+        {currentGame.seekerLocations && Object.entries(currentGame.seekerLocations).map(([userId, seekerLoc]) => (
+          <Marker key={userId} longitude={seekerLoc.lng} latitude={seekerLoc.lat}>
+            <div className="w-6 h-6 bg-red-500 rounded-full border-2 border-white shadow-lg"></div>
+          </Marker>
+        ))}
         <Source
           id="hiding-zone"
           type="geojson"
@@ -233,7 +361,7 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
             id="hiding-zone-circle"
             type="circle"
             paint={{
-              'circle-radius': 804.672,
+              'circle-radius': 200, // Fixed pixel size (200px radius = 400px diameter)
               'circle-color': 'rgba(255, 0, 0, 0.1)',
               'circle-stroke-color': 'rgba(255, 0, 0, 0.5)',
               'circle-stroke-width': 2,
@@ -242,12 +370,18 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
         </Source>
       </Map>
 
-      <button
-        onClick={() => setDrawerOpen(true)}
-        className="absolute top-4 left-4 bg-gray-900 text-white p-3 rounded-full shadow-lg z-10"
-      >
-        <Menu className="w-6 h-6" />
-      </button>
+      <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-10">
+        <button
+          onClick={() => setDrawerOpen(true)}
+          className="bg-gray-900 text-white p-3 rounded-full shadow-lg"
+        >
+          <Menu className="w-6 h-6" />
+        </button>
+        <div className="bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
+          <span className="text-sm text-gray-400">Game Code:</span>
+          <span className="text-xl font-bold text-blue-400">{game.code}</span>
+        </div>
+      </div>
 
       <AnimatePresence>
         {drawerOpen && (
@@ -326,23 +460,88 @@ export default function HiderInterface({ game }: HiderInterfaceProps) {
             <motion.div
               initial={{ scale: 0.8 }}
               animate={{ scale: 1 }}
-              className="bg-gray-900 text-white p-6 rounded-2xl max-w-md w-full"
+              className="bg-gray-900 text-white p-6 rounded-2xl max-w-md w-full relative z-40"
+              onClick={(e) => {
+                // Prevent clicks inside modal from bubbling to overlay
+                e.stopPropagation()
+              }}
             >
               <h2 className="text-2xl font-bold mb-4">Question</h2>
               <p className="text-lg mb-6">{pendingQuestion.question?.question}</p>
+              
+              {pendingQuestion.question?.type === 'photo' && (
+                <div className="mb-6 space-y-4">
+                  {photoPreview ? (
+                    <div className="space-y-2">
+                      <img src={photoPreview} alt="Preview" className="w-full rounded-lg max-h-64 object-cover" />
+                      <button
+                        onClick={() => {
+                          setPhotoFile(null)
+                          setPhotoPreview(null)
+                        }}
+                        className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors"
+                      >
+                        Remove Photo
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (file) {
+                            setPhotoFile(file)
+                            const reader = new FileReader()
+                            reader.onloadend = () => {
+                              setPhotoPreview(reader.result as string)
+                            }
+                            reader.readAsDataURL(file)
+                          }
+                        }}
+                        className="hidden"
+                        id="photo-upload"
+                      />
+                      <label
+                        htmlFor="photo-upload"
+                        className="flex items-center justify-center gap-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Camera className="w-5 h-5" />
+                        Take/Upload Photo
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <button
-                  onClick={() => answerQuestion(true)}
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+                  type="button"
+                  onClick={() => {
+                    console.log('Correct button clicked')
+                    answerQuestion(true)
+                  }}
+                  disabled={uploadingPhoto || isAnsweringRef.current || (pendingQuestion.question?.type === 'photo' && !photoFile)}
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Correct
+                  {uploadingPhoto ? 'Uploading...' : pendingQuestion.question?.type === 'photo' ? 'Submit Photo' : 'Correct'}
                 </button>
-                <button
-                  onClick={() => answerQuestion(false)}
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-                >
-                  Wrong
-                </button>
+                {pendingQuestion.question?.type !== 'photo' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      console.log('Wrong button clicked')
+                      answerQuestion(false)
+                    }}
+                    disabled={uploadingPhoto || isAnsweringRef.current}
+                    className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Wrong
+                  </button>
+                )}
               </div>
             </motion.div>
           </motion.div>

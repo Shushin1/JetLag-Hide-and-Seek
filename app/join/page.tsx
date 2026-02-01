@@ -10,6 +10,7 @@ export default function JoinPage() {
   const [code, setCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [firebaseError, setFirebaseError] = useState<string | null>(null)
+  const [gameSize, setGameSize] = useState<'small' | 'medium' | 'large'>('medium')
   const router = useRouter()
 
   useEffect(() => {
@@ -32,6 +33,16 @@ export default function JoinPage() {
     setFirebaseError(null)
     try {
       const gameCode = generateCode()
+      
+      // Calculate hiding zone radius based on game size
+      // Small/Medium: 0.25 mile = 402.336 meters
+      // Large: 0.5 mile = 804.672 meters
+      const hidingZoneRadius = gameSize === 'large' ? 804.672 : 402.336
+      
+      // Calculate hiding period end time
+      const hidingPeriodMinutes = gameSize === 'small' ? 30 : gameSize === 'medium' ? 60 : 180
+      const hidingPeriodEndsAt = new Date(Date.now() + hidingPeriodMinutes * 60 * 1000)
+      
       const gameRef = await addDoc(collection(db, 'games'), {
         code: gameCode,
         createdAt: new Date(),
@@ -43,8 +54,11 @@ export default function JoinPage() {
         coins: 0,
         hiderLocation: null,
         seekerLocations: {},
+        gameSize,
+        hidingZoneRadius,
+        hidingPeriodEndsAt,
       })
-      router.push(`/game/${gameRef.id}`)
+      router.push(`/game?id=${gameRef.id}`)
     } catch (error: any) {
       console.error('Error creating game:', error)
       setFirebaseError(error.message || 'Failed to create game. Please check your Firebase configuration.')
@@ -81,7 +95,7 @@ export default function JoinPage() {
         return
       }
 
-      router.push(`/game/${gameDoc.id}`)
+      router.push(`/game?id=${gameDoc.id}`)
     } catch (error: any) {
       console.error('Error joining game:', error)
       setFirebaseError(error.message || 'Failed to join game. Please check your Firebase configuration.')
@@ -112,6 +126,45 @@ export default function JoinPage() {
         )}
 
         <div className="space-y-4">
+          <div className="bg-gray-800 rounded-lg p-4 space-y-3">
+            <label className="text-sm font-semibold text-gray-300">Game Size</label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => setGameSize('small')}
+                className={`py-2 px-3 rounded-lg font-semibold transition-colors ${
+                  gameSize === 'small'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Small
+                <div className="text-xs mt-1 opacity-75">4-8 hrs</div>
+              </button>
+              <button
+                onClick={() => setGameSize('medium')}
+                className={`py-2 px-3 rounded-lg font-semibold transition-colors ${
+                  gameSize === 'medium'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Medium
+                <div className="text-xs mt-1 opacity-75">1 day</div>
+              </button>
+              <button
+                onClick={() => setGameSize('large')}
+                className={`py-2 px-3 rounded-lg font-semibold transition-colors ${
+                  gameSize === 'large'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Large
+                <div className="text-xs mt-1 opacity-75">2-4 days</div>
+              </button>
+            </div>
+          </div>
+
           <button
             onClick={createGame}
             disabled={loading}

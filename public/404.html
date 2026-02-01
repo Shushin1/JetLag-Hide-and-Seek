@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>404 - File Not Found</title>
+</head>
+<body>
+  <h1>404 - File Not Found</h1>
+  <p>The requested file could not be found.</p>
+  <script>
+    // Return proper 404 status
+    if (typeof window !== 'undefined' && window.parent !== window) {
+      window.parent.postMessage({ type: '404' }, '*');
+    }
+  </script>
+</body>
+</html>

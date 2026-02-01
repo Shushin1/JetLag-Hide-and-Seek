@@ -55,6 +55,11 @@ export default function RoleSwitcher({ gameId }: RoleSwitcherProps) {
         return
       }
 
+      if (!auth) {
+        setLoading(false)
+        return
+      }
+
       const gameData = { id: snapshot.id, ...snapshot.data() } as Game
       setGame(gameData)
 

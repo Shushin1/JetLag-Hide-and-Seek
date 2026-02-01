@@ -1,0 +1,15 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow read/write access to game photos
+    match /game-photos/{gameId}/{allPaths=**} {
+      allow read, write: if request.time < timestamp.date(2026, 3, 3);
+    }
+    
+    // Default: deny all other access
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

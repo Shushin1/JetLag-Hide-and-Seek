@@ -1,12 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { doc, onSnapshot, updateDoc, collection, query, where, getDocs } from 'firebase/firestore'
+import { useEffect, useState, useRef } from 'react'
+import { doc, onSnapshot, updateDoc, collection, query, where, getDocs, getDoc } from 'firebase/firestore'
 import { db, auth } from '@/lib/firebase'
-import { Game, Curse, Question } from '@/types/game'
+import { Game, Curse, Question, ChatMessage } from '@/types/game'
 import Map, { Marker } from 'react-map-gl'
-import 'mapbox-gl/dist/mapbox-gl.css'
-import { MapPin, X } from 'lucide-react'
+import { MapPin, X, MessageSquare, HelpCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface SeekerInterfaceProps {
@@ -23,8 +22,13 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
   const [currentGame, setCurrentGame] = useState<Game>(game)
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [questionsLoading, setQuestionsLoading] = useState(true)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [questionsDrawerOpen, setQuestionsDrawerOpen] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!db) return
     const gameRef = doc(db, 'games', game.id)
     const unsubscribe = onSnapshot(gameRef, (snapshot) => {
       if (!snapshot.exists()) return
@@ -40,7 +44,7 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
 
       if (gameData.pendingQuestion) {
         const questionType = gameData.pendingQuestion.question?.type
-        if (questionType === 'ping' || questionType === 'radar') {
+        if (questionType === 'radar') {
           setShowHiderLocation(true)
           setTimeout(() => {
             setShowHiderLocation(false)
@@ -51,6 +55,13 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
 
     return () => unsubscribe()
   }, [game.id])
+
+  // Auto-scroll chat to bottom when new messages arrive
+  useEffect(() => {
+    if (chatOpen && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [currentGame.chatMessages, chatOpen])
 
   useEffect(() => {
     if ('geolocation' in navigator) {
@@ -89,6 +100,7 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
   }, [])
 
   const updateSeekerLocation = async (loc: { lat: number; lng: number }) => {
+    if (!db || !auth) return
     try {
       const userId = auth.currentUser?.uid
       if (!userId) return
@@ -103,16 +115,26 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
   }
 
   const loadQuestions = async () => {
+    if (!db) {
+      console.error('Firebase db is not initialized')
+      setQuestionsLoading(false)
+      return
+    }
     try {
+      console.log('Loading questions from Firestore...')
       const questionsRef = collection(db, 'questions')
       const snapshot = await getDocs(questionsRef)
       const questionsData = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       })) as Question[]
+      console.log(`Loaded ${questionsData.length} questions`)
+      console.log('Questions:', questionsData)
       setQuestions(questionsData)
+      setQuestionsLoading(false)
     } catch (error) {
       console.error('Error loading questions:', error)
+      setQuestionsLoading(false)
     }
   }
 
@@ -122,24 +144,64 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
   }
 
   const sendQuestionRequest = async (category: string) => {
+    if (!db) {
+      console.error('Firebase db is not initialized')
+      return
+    }
     try {
+      // Check if there's already a pending question
+      const gameRef = doc(db, 'games', game.id)
+      const gameSnapshot = await getDoc(gameRef)
+      const currentGame = { id: gameSnapshot.id, ...gameSnapshot.data() } as Game
+      
+      if (currentGame.pendingQuestion) {
+        alert('Please wait for the current question to be answered before asking another one.')
+        return
+      }
+      
+      console.log('Sending question request for category:', category)
+      console.log('Available questions:', questions.length)
+      
       const categoryQuestions = questions.filter((q) => q.category === category)
-      if (categoryQuestions.length === 0) return
+      console.log('Category questions:', categoryQuestions.length)
+      
+      if (categoryQuestions.length === 0) {
+        console.warn(`No questions found for category: ${category}`)
+        alert(`No questions available in the ${category} category. Please seed questions.`)
+        return
+      }
 
       const randomQuestion = categoryQuestions[Math.floor(Math.random() * categoryQuestions.length)]
+      console.log('Selected question:', randomQuestion)
       
-      const gameRef = doc(db, 'games', game.id)
+      // Create chat message for the question
+      const chatMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: 'question',
+        content: randomQuestion.question,
+        question: randomQuestion.question,
+        category: category,
+        timestamp: new Date(),
+        sender: 'seeker',
+      }
+
+      const currentMessages = currentGame.chatMessages || []
+      const updatedMessages = [...currentMessages, chatMessage]
+
       await updateDoc(gameRef, {
         pendingQuestion: {
           category,
           question: randomQuestion,
           timestamp: new Date(),
         },
+        chatMessages: updatedMessages,
       })
 
+      console.log('Question sent successfully')
       setSelectedCategory(null)
     } catch (error) {
       console.error('Error sending question request:', error)
+      alert('Failed to send question. Check console for details.')
     }
   }
 
@@ -200,7 +262,8 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
           setMapError('Failed to load map. Please check your Mapbox token.')
         }}
         reuseMaps
-        interactive={mapReady}
+        dragRotate={false}
+        dragPan={true}
       >
         <Marker longitude={location.lng} latitude={location.lat}>
           <div className="w-6 h-6 bg-red-500 rounded-full border-2 border-white shadow-lg"></div>
@@ -215,20 +278,191 @@ export default function SeekerInterface({ game }: SeekerInterfaceProps) {
         )}
       </Map>
 
-      <div className="absolute bottom-0 left-0 right-0 bg-gray-900 text-white p-4 rounded-t-2xl shadow-2xl max-h-[50vh] overflow-y-auto">
-        <h3 className="text-xl font-bold mb-4">Questions</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {getCategories().map((category) => (
-            <button
-              key={category}
-              onClick={() => sendQuestionRequest(category)}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-            >
-              {category}
-            </button>
-          ))}
+      <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            className="bg-gray-900 text-white p-3 rounded-lg shadow-lg hover:bg-gray-800 transition-colors relative"
+          >
+            <MessageSquare className="w-6 h-6" />
+            {currentGame.chatMessages && currentGame.chatMessages.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {currentGame.chatMessages.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setQuestionsDrawerOpen(!questionsDrawerOpen)}
+            className="bg-gray-900 text-white p-3 rounded-lg shadow-lg hover:bg-gray-800 transition-colors"
+          >
+            <HelpCircle className="w-6 h-6" />
+          </button>
+        </div>
+        <div className="bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 justify-center">
+          <span className="text-sm text-gray-400">Game Code:</span>
+          <span className="text-xl font-bold text-blue-400">{currentGame.code}</span>
         </div>
       </div>
+
+      <AnimatePresence>
+        {chatOpen && (
+          <motion.div
+            initial={{ x: '-100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '-100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="absolute top-16 left-4 bottom-20 w-80 bg-gray-900 text-white z-20 shadow-2xl rounded-lg overflow-hidden flex flex-col"
+          >
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+              <h3 className="text-xl font-bold">Chat</h3>
+              <button
+                onClick={() => setChatOpen(false)}
+                className="p-1 hover:bg-gray-800 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {currentGame.chatMessages && currentGame.chatMessages.length > 0 ? (
+                <>
+                  {currentGame.chatMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`p-3 rounded-lg ${
+                      message.type === 'question'
+                        ? 'bg-blue-900/50 border border-blue-700'
+                        : message.type === 'answer'
+                        ? 'bg-green-900/50 border border-green-700'
+                        : message.type === 'photo'
+                        ? 'bg-yellow-900/50 border border-yellow-700'
+                        : 'bg-gray-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-semibold text-gray-400">
+                        {message.sender === 'hider' ? 'Hider' : 'Seeker'}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {message.timestamp?.toDate
+                          ? new Date(message.timestamp.toDate()).toLocaleTimeString()
+                          : new Date(message.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {message.type === 'question' && (
+                      <div>
+                        <p className="text-xs text-blue-300 mb-1">{message.category}</p>
+                        <p className="text-sm font-medium">{message.question}</p>
+                      </div>
+                    )}
+                    {message.type === 'answer' && (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1 line-through">{message.question}</p>
+                        <p className="text-sm font-medium">
+                          {message.content.includes('Correct') ? (
+                            <span className="text-green-400">{message.content}</span>
+                          ) : (
+                            <span className="text-red-400">{message.content}</span>
+                          )}
+                        </p>
+                        {message.photoUrl && (
+                          <div className="mt-2">
+                            <img 
+                              src={message.photoUrl} 
+                              alt="Answer photo" 
+                              className="w-full rounded-lg max-h-48 object-cover"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {message.type === 'photo' && (
+                      <div>
+                        <p className="text-xs text-yellow-300 mb-1">Photo Question: {message.question}</p>
+                        {message.photoUrl ? (
+                          <div className="mt-2">
+                            <img 
+                              src={message.photoUrl} 
+                              alt="Hider's photo" 
+                              className="w-full rounded-lg max-h-64 object-cover"
+                            />
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-400">Photo pending...</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </>
+              ) : (
+                <div className="text-center text-gray-400 py-8">
+                  <p>No messages yet</p>
+                  <p className="text-sm mt-2">Questions and answers will appear here</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {questionsDrawerOpen && (
+          <motion.div
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="absolute top-0 right-0 h-full w-80 bg-gray-900 text-white z-20 shadow-2xl overflow-y-auto"
+          >
+            <div className="p-4 space-y-4">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold">Questions</h2>
+                <button
+                  onClick={() => setQuestionsDrawerOpen(false)}
+                  className="p-2 hover:bg-gray-800 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {questionsLoading ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-400">Loading questions...</p>
+                </div>
+              ) : getCategories().length === 0 ? (
+                <div className="text-center py-8 space-y-4">
+                  <p className="text-gray-400">No questions available</p>
+                  <p className="text-sm text-gray-500">
+                    Questions need to be seeded into Firestore.
+                  </p>
+                  <a
+                    href="/admin/seed"
+                    className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors"
+                  >
+                    Go to Seed Page
+                  </a>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {getCategories().map((category) => (
+                    <button
+                      key={category}
+                      onClick={() => {
+                        sendQuestionRequest(category)
+                        setQuestionsDrawerOpen(false)
+                      }}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors text-left"
+                    >
+                      {category}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {activeCurse && (

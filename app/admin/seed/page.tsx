@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { seedDeck, seedQuestions, seedAll } from '@/scripts/seed-data-client'
-import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { CheckCircle2, XCircle, Loader2, Database } from 'lucide-react'
+import Link from 'next/link'
 
 export default function SeedPage() {
   const [loading, setLoading] = useState(false)
@@ -42,6 +43,14 @@ export default function SeedPage() {
           <h1 className="text-3xl font-bold mb-2">Firebase Data Seeder</h1>
           <p className="text-gray-400">Seed your Firestore collections</p>
         </div>
+
+        <Link
+          href="/admin/questions"
+          className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+        >
+          <Database className="w-5 h-5" />
+          Manage Questions (CRUD)
+        </Link>
 
         <div className="space-y-4">
           <button
